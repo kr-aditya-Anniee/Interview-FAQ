@@ -1,0 +1,41 @@
+very unordered_map implementation stores a linked list to external nodes in the array of buckets. Meaning that inserting an item will always allocate at least once (the new node) if not twice (resizing the array of buckets, then the new node).
+
+No, that is not at all the most efficient way to implement a hash map for most common uses. Unfortunately, a small "oversight" in the specification of unordered_map all but requires this behavior. The required behavior is that iterators to elements must stay valid when inserting or deleting other elements. Because inserting might cause the bucket array to grow (reallocate), it is not generally possible to have an iterator pointing directly into the bucket array and meet the stability guarantees.
+
+unordered_map is a better data structure if you are storing expensive-to-copy items as your key or value. Which makes sense, given that its general design was lifted from Boost's pre-move-semantics design.
+
+Chandler Carruth (Google) mentions this problem in his CppCon '14 talk "Efficiency with Algorithms, Performance with Data Structures".
+
+The Standard effectively mandates std::unordered_set and std::unordered_map implementations that use open hashing, which means an array of buckets, each of which holds the head of a logical (and typically actual) list. That requirement is subtle: it's a consequence of the default max load factor being 1.0 and the guarantee that the table will not be rehashed unless grown beyond that load factor: that would be impractical without chaining, as the collisions with closed hashing become overwhelming as the load factor approaches 1:
+
+23.2.5/15: The insert and emplace members shall not affect the validity of iterators if (N+n) < z * B, where N is the number of elements in the container prior to the insert operation, n is the number of elements inserted, B is the container’s bucket count, and z is the container’s maximum load factor.
+
+amongst the Effects of the constructor at 23.5.4.2/1: max_load_factor() returns 1.0.
+
+(To allow optimal iteration without passing over any empty buckets, GCC's implementation fills the buckets with iterators into a single singly-linked list holding all the values: the iterators point to the element immediately before that bucket's elements, so the next pointer there can be rewired if erasing the bucket's last value.)
+
+Regarding the text you quote:
+
+No, that is not at all the most efficient way to implement a hash map for most common uses. Unfortunately, a small "oversight" in the specification of unordered_map all but requires this behavior. The required behavior is that iterators to elements must stay valid when inserting or deleting other elements
+
+There is no "oversight"... what's done was very deliberate and done with full awareness. It's true that other compromises could have been struck, but the open hashing / chaining approach is a reasonable compromise for general use, that copes reasonably elegantly with collisions from mediocre hash functions, isn't too wasteful with small or large key/value types, and handles arbitrarily-many insert/erase pairs without gradually degrading performance the way many closed hashing implementations do.
+
+As evidence of the awareness, from Matthew Austern's proposal here:
+
+I'm not aware of any satisfactory implementation of open addressing in a generic framework. Open addressing presents a number of problems:
+
+• It's necessary to distinguish between a vacant position and an occupied one.
+
+• It's necessary either to restrict the hash table to types with a default constructor, and to construct every array element ahead of time, or else to maintain an array some of whose elements are objects and others of which are raw memory.
+
+• Open addressing makes collision management difficult: if you're inserting an element whose hash code maps to an already-occupied location, you need a policy that tells you where to try next. This is a solved problem, but the best known solutions are complicated.
+
+• Collision management is especially complicated when erasing elements is allowed. (See Knuth for a discussion.) A container class for the standard library ought to allow erasure.
+
+• Collision management schemes for open addressing tend to assume a fixed size array that can hold up to N elements. A container class for the standard library ought to be able to grow as necessary when new elements are inserted, up to the limit of available memory.
+
+Solving these problems could be an interesting research project, but, in the absence of implementation experience in the context of C++, it would be inappropriate to standardize an open-addressing container class.
+
+Specifically for insert-only tables with data small enough to store directly in the buckets, a convenient sentinel value for unused buckets, and a good hash function, a closed hashing approach may be roughly an order of magnitude faster and use dramatically less memory, but that's not general purpose.
+
+A full comparison and elaboration of hash table design options and their implications is off topic for S.O. as it's way too broad to address properly here.
